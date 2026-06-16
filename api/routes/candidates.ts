@@ -2,6 +2,12 @@ import { Router, type Request, type Response } from 'express'
 import prisma from '../prisma.js'
 import { authMiddleware } from '../middleware/auth.js'
 import { serializeCandidate, serializeStatusLog } from '../lib/serializers.js'
+import {
+  validateStatusTransition,
+  getNextSuggestedStatuses,
+  STATUS_LABEL,
+} from '../lib/statusRules.js'
+import type { CandidateStatus } from '@shared/types.js'
 
 const router = Router()
 
@@ -212,7 +218,7 @@ router.put('/:id', async (req: Request, res: Response): Promise<void> => {
 router.patch('/:id/status', async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params
-    const { status, note } = req.body
+    const { status, note, force } = req.body
 
     if (!status) {
       res.status(400).json({
@@ -245,7 +251,43 @@ router.patch('/:id/status', async (req: Request, res: Response): Promise<void> =
       return
     }
 
-    const fromStatus = candidate.status
+    const fromStatus = candidate.status as CandidateStatus
+    const toStatus = status as CandidateStatus
+
+    const validation = validateStatusTransition(fromStatus, toStatus)
+    const isAdminOrHR =
+      req.user.role === 'ADMIN' || req.user.role === 'HR'
+
+    if (!validation.valid) {
+      if (force && isAdminOrHR) {
+        console.warn(
+          `[FORCE_TRANSITION] User ${req.user.userId} forced status change: ` +
+            `${fromStatus} -> ${toStatus} for candidate ${id}`,
+        )
+      } else {
+        const allowedLabels = validation.allowedTargets
+          ?.map((s) => STATUS_LABEL[s])
+          .join('、')
+
+        res.status(400).json({
+          data: {
+            fromStatus,
+            toStatus,
+            fromLabel: STATUS_LABEL[fromStatus],
+            toLabel: STATUS_LABEL[toStatus],
+            allowedTargets: validation.allowedTargets,
+            allowedLabels,
+          },
+          message:
+            validation.reason +
+            (!isAdminOrHR
+              ? '\n如需强制跳转，请联系管理员或HR操作。'
+              : '\n管理员/HR可通过 force=true 强制变更。'),
+          code: 400,
+        })
+        return
+      }
+    }
 
     const updatedCandidate = await prisma.candidate.update({
       where: { id },
@@ -261,17 +303,61 @@ router.patch('/:id/status', async (req: Request, res: Response): Promise<void> =
         fromStatus,
         toStatus: status,
         operatorId: req.user.userId,
-        note,
+        note: force && !validation.valid ? `[强制变更] ${note || ''}` : note,
       },
     })
 
     res.json({
       data: serializeCandidate(updatedCandidate),
-      message: '状态更新成功',
+      message: force && !validation.valid
+        ? `状态已强制更新为「${STATUS_LABEL[toStatus]}」`
+        : '状态更新成功',
       code: 200,
     })
   } catch (error) {
     console.error('Update candidate status error:', error)
+    res.status(500).json({
+      data: null,
+      message: '服务器内部错误',
+      code: 500,
+    })
+  }
+})
+
+router.get('/:id/allowed-statuses', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params
+    const candidate = await prisma.candidate.findUnique({
+      where: { id },
+    })
+
+    if (!candidate) {
+      res.status(404).json({
+        data: null,
+        message: '候选人不存在',
+        code: 404,
+      })
+      return
+    }
+
+    const current = candidate.status as CandidateStatus
+    const allowed = getNextSuggestedStatuses(current)
+
+    res.json({
+      data: {
+        currentStatus: current,
+        currentLabel: STATUS_LABEL[current],
+        allowedTargets: allowed,
+        allowedLabels: allowed.map((s) => ({
+          value: s,
+          label: STATUS_LABEL[s],
+        })),
+      },
+      message: '获取成功',
+      code: 200,
+    })
+  } catch (error) {
+    console.error('Get allowed statuses error:', error)
     res.status(500).json({
       data: null,
       message: '服务器内部错误',
