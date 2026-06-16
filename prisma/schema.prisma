@@ -1,0 +1,159 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  HR
+  INTERVIEWER
+  HIRING_MANAGER
+  ADMIN
+}
+
+enum JobStatus {
+  DRAFT
+  PUBLISHED
+  CLOSED
+}
+
+enum CandidateStatus {
+  NEW
+  SCREENING
+  SCREENING_PASSED
+  FIRST_INTERVIEW
+  SECOND_INTERVIEW
+  FINAL_INTERVIEW
+  OFFER_PENDING
+  OFFER_SENT
+  OFFER_ACCEPTED
+  OFFER_REJECTED
+  HIRED
+  REJECTED
+}
+
+enum InterviewType {
+  PHONE
+  ONSITE
+  VIDEO
+}
+
+enum InterviewStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+}
+
+enum Recommendation {
+  HIRE
+  CONSIDER
+  REJECT
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  passwordHash  String
+  role          UserRole
+  department    String?
+  avatarUrl     String?
+  createdAt     DateTime  @default(now())
+  jobs          Job[]     @relation("JobCreator")
+  interviews    Interview[] @relation("InterviewInterviewers")
+  evaluations   InterviewEvaluation[]
+  statusLogs    StatusLog[]
+}
+
+model Job {
+  id              String      @id @default(cuid())
+  title           String
+  department      String
+  description     String
+  requirements    String
+  salaryRange     String?
+  location        String
+  status          JobStatus   @default(DRAFT)
+  hiringManagerId String
+  hiringManager   User        @relation("JobCreator", fields: [hiringManagerId], references: [id])
+  candidates      Candidate[]
+  interviews      Interview[]
+  createdAt       DateTime    @default(now())
+}
+
+model Candidate {
+  id            String          @id @default(cuid())
+  name          String
+  email         String
+  phone         String
+  position      String
+  experience    Int             @default(0)
+  education     String?
+  skills        String
+  resumeUrl     String?
+  status        CandidateStatus @default(NEW)
+  source        String?
+  rating        Int             @default(0)
+  appliedJobId  String?
+  appliedJob    Job?            @relation(fields: [appliedJobId], references: [id])
+  interviews    Interview[]
+  evaluations   InterviewEvaluation[]
+  statusLogs    StatusLog[]
+  createdAt     DateTime        @default(now())
+}
+
+model Interview {
+  id             String        @id @default(cuid())
+  candidateId    String
+  candidate      Candidate     @relation(fields: [candidateId], references: [id])
+  jobId          String
+  job            Job           @relation(fields: [jobId], references: [id])
+  round          Int           @default(1)
+  type           InterviewType @default(ONSITE)
+  scheduledAt    DateTime
+  duration       Int           @default(60)
+  meetingRoom    String?
+  meetingLink    String?
+  status         InterviewStatus @default(SCHEDULED)
+  interviewers   User[]        @relation("InterviewInterviewers")
+  evaluations    InterviewEvaluation[]
+  createdAt      DateTime      @default(now())
+}
+
+model InterviewEvaluation {
+  id                 String         @id @default(cuid())
+  interviewId        String
+  interview          Interview      @relation(fields: [interviewId], references: [id])
+  interviewerId      String
+  interviewer        User           @relation(fields: [interviewerId], references: [id])
+  candidateId        String
+  candidate          Candidate      @relation(fields: [candidateId], references: [id])
+  technicalRating    Int            @default(0)
+  communicationRating Int           @default(0)
+  problemSolvingRating Int          @default(0)
+  teamworkRating     Int            @default(0)
+  cultureFitRating   Int            @default(0)
+  overallRating      Int            @default(0)
+  comments           String?
+  recommendation     Recommendation?
+  createdAt          DateTime       @default(now())
+}
+
+model StatusLog {
+  id          String          @id @default(cuid())
+  candidateId String
+  candidate   Candidate       @relation(fields: [candidateId], references: [id])
+  fromStatus  CandidateStatus?
+  toStatus    CandidateStatus
+  operatorId  String
+  operator    User            @relation(fields: [operatorId], references: [id])
+  note        String?
+  createdAt   DateTime        @default(now())
+}
